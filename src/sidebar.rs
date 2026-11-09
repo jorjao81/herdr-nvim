@@ -380,7 +380,16 @@ impl Host {
         ];
         let info = self
             .herdr
-            .plugin_pane_open(&plugin_id(), ENTRYPOINT, target, None, &envs, true)
+            // Keep the frontend alongside its daemon. TUIOS otherwise defaults
+            // plugin panes to the plugin checkout and detects the wrong repo.
+            .plugin_pane_open(
+                &plugin_id(),
+                ENTRYPOINT,
+                target,
+                Some(&record.cwd.to_string_lossy()),
+                &envs,
+                true,
+            )
             .context("cannot open sidebar pane")?;
         let pane = info.pane_id.clone();
         self.set_sidebar_record(Some(&pane), info.terminal_id.as_deref(), None)?;
@@ -753,7 +762,57 @@ pub fn run_sidebar() -> Result<i32> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::{BufReader, Write};
+    use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
+
+    #[test]
+    fn sidebar_pane_inherits_daemon_working_directory() {
+        for (index, target) in [Some("w1:p1"), None].into_iter().enumerate() {
+            let socket =
+                std::env::temp_dir().join(format!("hn-cwd-{}-{index}.sock", std::process::id()));
+            let listener = UnixListener::bind(&socket).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(&stream).read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                // Stop before recording the sidebar: this test must not touch
+                // the user's real daemon registry or open a live pane.
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"error": {
+                        "code": "test_stop", "message": "request captured"
+                    }})
+                )
+                .unwrap();
+                request
+            });
+            let host = Host {
+                cfg: Config::default(),
+                herdr: Herdr {
+                    bin: "herdr".into(),
+                    socket: socket.clone(),
+                },
+                ctx: Context::default(),
+                tab_id: "w1:t1".into(),
+                session: "test".into(),
+            };
+            let mut record = record(None);
+            record.cwd = PathBuf::from("/workspace/ticket with spaces/é");
+
+            let error = host.launch_sidebar_pane(&record, target).unwrap_err();
+            let request = server.join().unwrap();
+            std::fs::remove_file(socket).unwrap();
+
+            assert_eq!(crate::herdr::error_code(&error), Some("test_stop"));
+            assert_eq!(request["method"], "plugin.pane.open");
+            assert_eq!(request["params"]["cwd"], record.cwd.to_str().unwrap());
+            assert_eq!(request["params"]["target_pane_id"], json!(target));
+            assert_eq!(request["params"]["env"]["HERDR_NVIM_SOCKET"], "/tmp/a.sock");
+        }
+    }
 
     fn record(terminal: Option<&str>) -> DaemonRecord {
         DaemonRecord {

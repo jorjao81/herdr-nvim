@@ -59,6 +59,23 @@ Full reference: `:help herdr-nvim` (or [doc/herdr-nvim.txt](doc/herdr-nvim.txt))
 
 ## Install
 
+### TUIOS fork
+
+This fork keeps the sidebar frontend in the same working directory as its
+Neovim daemon. Without an explicit directory, TUIOS starts the frontend in
+the plugin checkout, which can incorrectly group the session under that
+repository in the session rail.
+
+With a Rust toolchain available, install this fork from a terminal outside
+TUIOS (plugin management is not allowed from inside a TUIOS pane):
+
+```sh
+HERDR_NVIM_NO_DOWNLOAD=1 tuios plugins install jorjao81/herdr-nvim --replace
+```
+
+Reopen the sidebar after installation to apply the directory change to its
+new frontend process. Existing sidebar processes are not changed by a build.
+
 ### 1. The Herdr plugin
 
 From GitHub:
